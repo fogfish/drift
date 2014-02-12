@@ -1,0 +1,15 @@
+*.*~
+*.log
+*.aux
+*.beam
+*.dump
+*.tag.gz
+*.tgz
+*.pdf
+*.gz
+deps.config
+ebin/
+deps/
+.eunit/
+rebar
+*.sublime-*

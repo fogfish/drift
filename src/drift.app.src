@@ -1,0 +1,14 @@
+{application, drift,
+   [
+      {description, "erlang application deployment utility"},
+      {vsn,         "0.0.0"},
+      {modules,     []},
+      {registered,  []},
+      {applications,[
+         kernel
+        ,stdlib
+      ]},
+      {mod, {drift_app, []}},
+      {env, []}
+   ]
+}.  
