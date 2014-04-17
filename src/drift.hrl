@@ -16,11 +16,11 @@
 %%
 
 %% enable debug output
--define(CONFIG_DEBUG, true).
+% -define(CONFIG_DEBUG, true).
 
 %%
 %% default libdir
--define(CONFIG_LIBDIR, "/tmp/drift").
+-define(CONFIG_LIBDIR, "/tmp/drift/lib").
 
 %%
 %% logger macro

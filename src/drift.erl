@@ -14,18 +14,16 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
-%%  @description
+%% @description
 %%
 -module(drift).
 -include("drift.hrl").
 
 -export([
-   ephemeral/1
-  ,ephemeral/2
-  ,permanent/1
+   ephemeral/2
   ,permanent/2
-  ,withdraw/1
   ,withdraw/2
+  ,deploy/2
 ]).
 
 %%
@@ -34,31 +32,39 @@
 %% file app.app and load the specification it contains. The application
 %% is deployed to VM code memory only. 
 %% If application name is omitted then current project is deployed
--spec(ephemeral/1 :: (node()) -> ok | {error, any()}).
 -spec(ephemeral/2 :: (node(), atom()) -> ok | {error, any()}).
-
-ephemeral(Node) ->
-   {ok, Path} = file:get_cwd(),
-   App = list_to_atom(filename:basename(Path)),
-   ephemeral(Node, App, Path).
 
 ephemeral(Node, App)
  when is_atom(App) ->
-   ephemeral(Node, App, code:lib_dir(App));
-ephemeral(Node, [Head|Tail]) ->
-   ephemeral(Node, Head),
-   ephemeral(Node, Tail);
-ephemeral(_Node, []) ->
-   ok.
+   try
+      ephemeral(drift_erl:new(Node, App))
+   catch _:Reason ->
+      Reason
+   end;
 
-ephemeral(Node, App, Path) ->
-   ?DEBUG("==> ephemeral ~s ~s", [Node, Path]),
-   _ = ephemeral_deploy_appfile(Node, App, Path),
+ephemeral(Node, [Tail]) ->
+   ephemeral(Node, Tail);
+ephemeral(Node, [Head | Tail]) ->
+   case drift_erl:exists(drift_erl:new(Node, Head)) of
+      non_existing ->
+         case ephemeral(Node, Head) of
+            ok    ->
+               ephemeral(Node, Tail);
+            Error ->
+               Error
+         end;
+      _ ->
+         ephemeral(Node, Tail)
+   end.
+
+ephemeral(X) ->
+   ?DEBUG("==> ephemeral ~s (~s)~n", [drift_erl:name(X), drift_erl:vsn(X)]),
+   _ = ephemeral_deploy_appfile(X),
    lists:foreach(
       fun(Mod) -> 
-         ephemeral_deploy_module(Node, Mod, Path)
+         ephemeral_deploy_module(Mod, X)
       end,
-      modules(Path)
+      drift_erl:module(X)
    ).
 
 %%
@@ -66,67 +72,81 @@ ephemeral(Node, App, Path) ->
 %% searches the code path for the application resource file app.app and
 %% load the specification it contains. 
 %% If application name is omitted then current project is deployed
--spec(permanent/1 :: (node()) -> ok | {error, any()}).
 -spec(permanent/2 :: (node(), atom()) -> ok | {error, any()}).
-
-permanent(Node) ->
-   {ok, Path} = file:get_cwd(),
-   App = list_to_atom(filename:basename(Path)),
-   permanent(Node, App, Path).
 
 permanent(Node, App)
  when is_atom(App) ->
-   permanent(Node, App, code:lib_dir(App));
-permanent(Node, [Head|Tail]) ->
-   permanent(Node, Head),
+   try
+      permanent(drift_erl:new(Node, App))
+   catch _:Reason ->
+      Reason
+   end;
+
+permanent(Node, [Tail]) ->
    permanent(Node, Tail);
-permanent(_Node, []) ->
-   ok.
+permanent(Node, [Head | Tail]) ->
+   case drift_erl:exists(drift_erl:new(Node, Head)) of
+      non_existing ->
+         case permanent(Node, Head) of
+            ok    ->
+               permanent(Node, Tail);
+            Error ->
+               Error
+         end;
+      _ ->
+         permanent(Node, Tail)
+   end.
 
-
-permanent(Node, App, Path) ->
-   ?DEBUG("==> permanent ~s ~s~n", [Node, Path]),
-   Root = permanent_deploy_appfile(Node, App, Path),
+permanent(X) ->
+   ?DEBUG("==> permanent ~s (~s)~n", [drift_erl:name(X), drift_erl:vsn(X)]),
+   _ = permanent_deploy_appfile(X),
    lists:foreach(
       fun(Mod) -> 
-         permanent_deploy_module(Node, Mod, Root)
+         permanent_deploy_module(Mod, X)
       end,
-      modules(Path)
+      drift_erl:module(X)
    ),
    lists:foreach(
       fun(File) ->
-         permanent_deploy_private(Node, File, Root)
+         permanent_deploy_private(File, X)
       end,
-      privates(Path)
+      drift_erl:private(X)
    ).
 
 %%
 %% withdraw deployed application.
 -spec(withdraw/2 :: (node(), atom()) -> ok | {error, any()}).
 
-withdraw(Node) ->
-   {ok, Path} = file:get_cwd(),
-   App = list_to_atom(filename:basename(Path)),
-   withdraw(Node, App, Path).
-
 withdraw(Node, App) ->
-   withdraw(Node, App, code:lib_dir(App)).
+   try
+      withdraw(drift_erl:new(Node, App))
+   catch _:Reason ->
+      Reason
+   end.
 
-withdraw(Node, App, Path) ->
-   ?DEBUG("==> withdraw ~s ~s~n", [Node, Path]),
+withdraw(X) ->
+   ?DEBUG("==> withdraw ~s~n", [drift_erl:name(X)]),
+   Node = drift_erl:node(X),
    ok   = lists:foreach(
       fun(Mod) -> 
          ?DEBUG("==> withdraw ~s: module ~s~n", [Node, Mod]),
          _  = rpc:call(Node, code, purge,  [Mod]),
          _  = rpc:call(Node, code, delete, [Mod])
       end,
-      modules(Path)
+      drift_erl:module(X)
    ),
    %% attempt to delete application dir
-   Root = path(Node, App),
-   rpc:call(Node, os, cmd, [lists:flatten(io_lib:format("rm -Rf ~s", [Root]))]),
+   rpc:call(Node, os, cmd, [
+      lists:flatten(io_lib:format("rm -Rf ~s", [drift_erl:path(X)]))
+   ]),
    ok.
 
+%%
+%% permanently deploy application and its dependencies
+-spec(deploy/2 :: (node(), atom()) -> ok | {error, any()}).
+
+deploy(Node, App) ->
+   permanent(Node, applib:deps(App)).
 
 
 %%-----------------------------------------------------------------------------
@@ -136,133 +156,88 @@ withdraw(Node, App, Path) ->
 %%-----------------------------------------------------------------------------
 
 %%
-%% application config
-config(Key, Default) ->
-   case application:get_env(drift, Key) of
-      undefined -> 
-         Default;
-      {ok, Val} ->
-         Val
-   end.
-
-%%
-%% list of binary files
-files(Path) ->
-   filelib:wildcard(
-      filename:join([Path, ebin, "*" ++ code:objfile_extension()])
-   ).
-
-%%
-%% list of compiled modules
-modules(Path) ->
-   [list_to_atom(filename:basename(X, code:objfile_extension())) || X <- files(Path)].
-
-%%
-%% list of private files
-%% @todo: recursive
-privates(Path) ->
-   fs:fold(
-      fun(X, Acc) -> [X|Acc] end,
-      [],
-      filename:join([Path, priv])
-   ).
-
-%%
-%% application node path
-path(Node, App) ->
-   case rpc:call(Node, code, lib_dir, [App]) of
-      %% application is not known by node
-      {error, _} ->
-         filename:join([config(libdir, ?CONFIG_LIBDIR), Node, "lib", App]);
-      Result ->
-         Result
-   end.
-
-%%
-%% check if application is loaded or running on remote node
-is_application(Node, App) ->
-   Running = rpc:call(Node, application, which_applications, []),
-   case lists:keyfind(App, 1, Running) of
-      false ->
-         Loaded = rpc:call(Node, application, loaded_applications, []),
-         lists:keyfind(App, 1, Loaded);
-      Result->
-         Result
-   end.
-
-
-%%
 %% ephemeral appfile deployment
-ephemeral_deploy_appfile(Node, App, Path) ->
-   ?DEBUG("==> ephemeral deploy ~s: ~s~n", [Node, App]),
-   File  = atom_to_list(App) ++ ".app",
-   Local = filename:join([Path, ebin, File]),
-   {ok, Binary} = file:read_file(Local),
-   case is_application(Node, App) of
-      %% application is not known (appfile shall be uploaded)
-      false ->
-         Remote = filename:join([path(Node, App), ebin, File]),
-         ok   = rpc:call(Node, filelib, ensure_dir, [Remote]),
-         true = rpc:call(Node, code, add_patha, [filename:dirname(Remote)]),
-         ok   = rpc:call(Node, file, write_file, [Remote, Binary]);
-      %% application is know hotswap modules   
+ephemeral_deploy_appfile(X) ->
+   AppFile = filename:basename(drift_erl:appfile(X)),
+   ?DEBUG("==> ephemeral deploy ~s: ~s~n", [drift_erl:name(X), AppFile]),
+   case drift_erl:exists(X) of
+      non_existing ->
+         {ok, Bin} = file:read_file(drift_erl:appfile(X)),
+         Node = drift_erl:node(X),
+         File = filename:join([drift_erl:path(X), ebin, AppFile]),
+         ok   = rpc:call(Node, filelib, ensure_dir, [File]),
+         true = rpc:call(Node, code, add_patha, [filename:dirname(File)]),
+         ok   = rpc:call(Node, file, write_file, [File, Bin]);
       _ ->
          ok
    end.
 
 %%
 %% ephemeral appfile deployment
-permanent_deploy_appfile(Node, App, Path) ->
-   ?DEBUG("==> permanent deploy ~s: ~s~n", [Node, App]),
-   File  = atom_to_list(App) ++ ".app",
-   Local = filename:join([Path, ebin, File]),
-   {ok, Binary} = file:read_file(Local),
-   Root   = path(Node, App),
-   Remote = filename:join([Root, ebin, File]),
-   ok   = rpc:call(Node, filelib, ensure_dir, [Remote]),
-   true = rpc:call(Node, code, add_patha, [filename:dirname(Remote)]),
-   ok   = rpc:call(Node, file, write_file, [Remote, Binary]),
-   Root.
+permanent_deploy_appfile(X) ->
+   AppFile = filename:basename(drift_erl:appfile(X)),
+   ?DEBUG("==> permanent deploy ~s: ~s~n", [drift_erl:name(X), AppFile]),
+   {ok, Bin} = file:read_file(drift_erl:appfile(X)),
+   Node = drift_erl:node(X),
+   File = filename:join([drift_erl:path(X), ebin, AppFile]),
+   ok   = rpc:call(Node, filelib, ensure_dir, [File]),
+   true = rpc:call(Node, code, add_patha, [filename:dirname(File)]),
+   ok   = rpc:call(Node, file, write_file, [File, Bin]).
 
 %%
 %% ephemeral module deployment
-ephemeral_deploy_module(Node, Mod, _Path) ->
-   ?DEBUG("==> ephemeral deploy ~s: module ~s~n", [Node, Mod]),
+ephemeral_deploy_module(Mod, X) ->
+   ?DEBUG("==> ephemeral deploy ~s: module ~s~n", [drift_erl:name(X), Mod]),
    {Mod, Binary, _} = code:get_object_code(Mod),
-   _  = rpc:call(Node, code, purge, [Mod]),
+   Node = drift_erl:node(X),
+   _    = rpc:call(Node, code, purge, [Mod]),
    {module, Mod} = rpc:call(Node, code, load_binary, [Mod, undefined, Binary]).
 
    
-permanent_deploy_module(Node, Mod, Root) ->
-   ?DEBUG("==> permanent deploy ~s: module ~s~n", [Node, Mod]),
+permanent_deploy_module(Mod, X) ->
+   ?DEBUG("==> permanent deploy ~s: module ~s~n", [drift_erl:name(X), Mod]),
    {Mod, Binary, _} = code:get_object_code(Mod),
+   Node = drift_erl:node(X),   
    _  = rpc:call(Node, code, ensure_loaded, [Mod]),
    case rpc:call(Node, code, which, [Mod]) of
-      % file exists (overwrite it)
-      File when is_binary(File) orelse is_list(File) ->
-         % load module
-         ok = rpc:call(Node, file, write_file, [File, Binary]),
-         _  = rpc:call(Node, code, purge, [Mod]),
-         {module, Mod} = rpc:call(Node, code, load_file, [Mod]);
+      % file exists at sandbox, overwrite
+      File when is_list(File) ->
+         case lists:prefix(drift_erl:path(X), File) of
+            true ->
+               ok = rpc:call(Node, file, write_file, [File, Binary]),
+               _  = rpc:call(Node, code, purge, [Mod]),
+               {module, Mod} = rpc:call(Node, code, load_file, [Mod]);
+            false ->
+               deploy_module(Mod, Binary, X)
+         end;
       % file does not exists create new one
       _ ->
-         File   = filename:join([Root, ebin, Mod]) ++ code:objfile_extension(),
-         % deploy module
-         ok = rpc:call(Node, filelib, ensure_dir, [File]),
-         ok = rpc:call(Node, file, write_file, [File, Binary]),
-
-         % load module
-         _  = rpc:call(Node, code, purge, [Mod]),
-         {module, Mod} = rpc:call(Node, code, load_file, [Mod])
+         deploy_module(Mod, Binary, X)
    end.
 
-permanent_deploy_private(Node, File, Root) ->
-   ?DEBUG("==> permanent deploy ~s: file ~s", [Node, File]),
+deploy_module(Mod, Binary, X) ->
+   File   = filename:join([drift_erl:path(X), ebin, Mod]) ++ code:objfile_extension(),
+   % deploy
+   Node = drift_erl:node(X),   
+   ok = rpc:call(Node, filelib, ensure_dir, [File]),
+   ok = rpc:call(Node, file, write_file,    [File, Binary]),
+   % load module
+   _  = rpc:call(Node, code, purge, [Mod]),
+   {module, Mod} = rpc:call(Node, code, load_file, [Mod]).
 
+%%
+%%
+permanent_deploy_private(File, X) ->
+   ?DEBUG("==> permanent deploy ~s: file ~s", [drift_erl:name(X), File]),
+   Suffix = lists:dropwhile(
+      fun(A) -> A =/= "priv" end,
+      filename:split(File)
+   ),
    {ok, Binary} = file:read_file(File),
-   Target = filename:join([Root, priv, filename:basename(File)]),
+   Target = filename:join([drift_erl:path(X)] ++ Suffix),
 
    % deploy module
+   Node = drift_erl:node(X),      
    ok   = rpc:call(Node, filelib, ensure_dir, [Target]),
    ok   = rpc:call(Node, file, write_file, [Target, Binary]).
 
