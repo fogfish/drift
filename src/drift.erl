@@ -26,6 +26,8 @@
   ,permanent/3
   ,withdraw/2
   ,deploy/2
+  ,patch/2
+  ,main/1
 ]).
 
 %%
@@ -39,11 +41,12 @@
 
 ephemeral(Node, App)
  when is_atom(App) ->
-   try
+   % try
       ephemeral(drift_erl:new(Node, App))
-   catch _:Reason ->
-      Reason
-   end;
+   % catch _:Reason ->
+      % Reason
+   % end;
+   ;
 
 ephemeral(Node, [Tail]) ->
    ephemeral(Node, Tail);
@@ -169,6 +172,23 @@ withdraw(X) ->
 deploy(Node, App) ->
    permanent(Node, applib:deps(App)).
 
+%%
+%% patch single module
+-spec(patch/2 :: (node(), atom()) -> ok | {error, any()}).
+
+patch(Node, Mod) ->
+   ?DEBUG("==> patch ~s~n", [Mod]),
+   {Mod, Binary, _} = code:get_object_code(Mod),
+   _    = rpc:call(Node, code, purge, [Mod]),
+   {module, Mod} = rpc:call(Node, code, load_binary, [Mod, undefined, Binary]),
+   ok.
+
+%%
+%% command-line utility
+-spec(main/1 :: (list()) -> ok).
+
+main(Args) ->
+   drift_tool:main(Args).
 
 %%-----------------------------------------------------------------------------
 %%

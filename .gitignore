@@ -13,3 +13,4 @@ deps/
 .eunit/
 rebar
 *.sublime-*
+drift

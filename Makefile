@@ -95,7 +95,7 @@ BUILDER = cd /tmp && git clone -b ${BRANCH} ${GIT}/${APP} && cd /tmp/${APP} && m
 all: rebar deps compile
 
 compile:
-	@./rebar compile
+	@./rebar compile escriptize
 
 deps:
 	@./rebar get-deps
