@@ -15,13 +15,15 @@
 %%   limitations under the License.
 %%
 %% @description
-%%
+%% @todo: patch module
 -module(drift).
 -include("drift.hrl").
 
 -export([
    ephemeral/2
+  ,ephemeral/3
   ,permanent/2
+  ,permanent/3
   ,withdraw/2
   ,deploy/2
 ]).
@@ -33,6 +35,7 @@
 %% is deployed to VM code memory only. 
 %% If application name is omitted then current project is deployed
 -spec(ephemeral/2 :: (node(), atom()) -> ok | {error, any()}).
+-spec(ephemeral/3 :: (node(), atom(), list()) -> ok | {error, any()}).
 
 ephemeral(Node, App)
  when is_atom(App) ->
@@ -46,6 +49,7 @@ ephemeral(Node, [Tail]) ->
    ephemeral(Node, Tail);
 ephemeral(Node, [Head | Tail]) ->
    case drift_erl:exists(drift_erl:new(Node, Head)) of
+      %% deploy missed dependency
       non_existing ->
          case ephemeral(Node, Head) of
             ok    ->
@@ -53,8 +57,16 @@ ephemeral(Node, [Head | Tail]) ->
             Error ->
                Error
          end;
+      %% do not deploy existed dependency   
       _ ->
          ephemeral(Node, Tail)
+   end.
+
+ephemeral(Node, App, [Type]) ->
+   try
+      ephemeral(drift_erl:new(Node, Type, App))
+   catch _:Reason ->
+      Reason
    end.
 
 ephemeral(X) ->
@@ -73,6 +85,7 @@ ephemeral(X) ->
 %% load the specification it contains. 
 %% If application name is omitted then current project is deployed
 -spec(permanent/2 :: (node(), atom()) -> ok | {error, any()}).
+-spec(permanent/3 :: (node(), atom(), list()) -> ok | {error, any()}).
 
 permanent(Node, App)
  when is_atom(App) ->
@@ -95,6 +108,14 @@ permanent(Node, [Head | Tail]) ->
          end;
       _ ->
          permanent(Node, Tail)
+   end.
+
+permanent(Node, App, [Type])
+ when is_atom(App) ->
+   try
+      permanent(drift_erl:new(Node, Type, App))
+   catch _:Reason ->
+      Reason
    end.
 
 permanent(X) ->

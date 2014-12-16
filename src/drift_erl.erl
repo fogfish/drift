@@ -21,6 +21,7 @@
 
 -export([
    new/2
+  ,new/3
   ,node/1
   ,name/1
   ,vsn/1
@@ -38,8 +39,9 @@
 
 %% internal state
 -record(app, {
-   node    = undefined :: node()
-  ,name    = undefined :: atom()
+   node    = undefined :: node()       %% node name where to deploy application
+  ,type    = undefined :: sys | app    %% type of application sys - overwrites (sys library)
+  ,name    = undefined :: atom()       %% application name
   ,appfile = undefined :: list()
   ,version = undefined :: list()
 }).
@@ -47,9 +49,13 @@
 %%
 %%
 new(Node, Name) ->
+   new(Node, app, Name).
+
+new(Node, Type, Name) ->
    File = lookup(Name),
    #app{
       node    = Node
+     ,type    = Type
      ,name    = Name
      ,appfile = File
      ,version = version(File)
@@ -98,14 +104,18 @@ private(#app{appfile=X}) ->
 
 
 %%
-%%
+%% check if application exists on remote node
 exists(#app{node=Node, name=Name}) ->
    lookup(Node, Name).
 
 %%
 %% remote path
-path(#app{name=Name, version=Vsn}) ->
-   filename:join([config(libdir, ?CONFIG_LIBDIR), scalar:c(Name) ++ "-" ++ Vsn]).
+path(#app{type=app, name=Name, version=Vsn}) ->
+   filename:join([config(libdir, ?CONFIG_LIBDIR), scalar:c(Name) ++ "-" ++ Vsn]);
+
+path(#app{node=Node, type=sys, name=Name, version=Vsn}) ->
+   Root = rpc:call(Node, code, lib_dir, []),
+   filename:join([Root, scalar:c(Name) ++ "-" ++ Vsn]).
 
 
 %%-----------------------------------------------------------------------------
