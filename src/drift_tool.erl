@@ -21,9 +21,21 @@
 -export([main/1]).
 
 %%
+%%
+-define(verbose(Msg, Args, Opts),  lists:member(verbose, Opts) =/= undefined andalso io:format(Msg, Args)).
+
+%%
 %% command-line entry
 main(Args) ->
    {ok, {Opts, Files}} = getopt:parse(opts(), Args),
+   lists:foreach(
+      fun(X) -> ?verbose("::: option ~p~n", [X], Opts) end, 
+      Opts
+   ),
+   lists:foreach(
+      fun(X) -> ?verbose("::: file ~p~n", [X], Opts) end, 
+      Files
+   ),
    case lists:member(help, Opts) of
       true ->
          getopt:usage(opts(), escript:script_name(), "FILE"),
@@ -40,27 +52,29 @@ opts() ->
       {help,      $h, "help",    undefined,        "Print usage"}
      ,{join,      $J, "join",    atom,             "Erlang long node name of remote node"}
      ,{cookie,    $C, "cookie",  {atom, nocookie}, "Erlang network distribution magic cookie"}
-     ,{libdir,    $L, "libdir",  string,           "Library directory"}
-     ,{patch,     $p, undefined, undefined,        "Patch module (ephemeral module deployment)"}
-     ,{ephemeral, $e, undefined, undefined,        "Ephemeral application deployment"}
-     ,{permanent, $d, undefined, undefined,        "Permanent application deployment"}
-     ,{system,    $s, undefined, undefined,        "System application deployment"}
-     ,{remove,    $r, undefined, undefined,        "Remove deployed application"}
+     ,{libdir,    $L, "libdir",  string,           "Root path to lookup libraries (expanded to path/*/ebin)"}
+     ,{prefix,    $P, "prefix",  string,           "Prefix to install libraries"}
+     ,{deps,      $d, undefined, undefined,        "Install all application dependencies"}
+     ,{system,    $s, undefined, undefined,        "System flag, installs library to code:lib_dir()"}
+     ,{permanent, $p, undefined, undefined,        "Permanent flag, application code is written to disk"}
+     ,{remove,    $r, undefined, undefined,        "Remove flag, application code is withdrawn from node"}
+     ,{patch,     $m, undefined, undefined,        "Patch module (ephemeral module deployment)"}
+     ,{verbose,   $v, undefined, undefined,        "Verbose output"}
    ].
 
 %%
 %% 
 init(Opts, Files) ->
-   ok = init_libdir(Opts),
+   ok = init_prefix(Opts),
    ok = init_net(Opts),
    ok = join_net(Opts),
    ok = lists:foreach(
-      fun(File) -> deploy(Opts, File) end,
+      fun(File) -> exec(Opts, File) end,
       Files
    ).
 
-init_libdir(Opts) ->
-   case lists:keyfind(libdir, 1, Opts) of
+init_prefix(Opts) ->
+   case lists:keyfind(prefix, 1, Opts) of
       false ->
          ok;
       {_, LibDir} ->
@@ -79,68 +93,88 @@ join_net(Opts) ->
    pong = net_adm:ping(Node),
    io:format("==> join ~s~n", [Node]).
 
-deploy(Opts, File) ->
-   Path = filename:dirname(File),
-   code:add_patha(Path),
+exec(Opts, File) ->
+   add_code_path(Opts, File),
    Name = erlang:list_to_atom(
       filename:basename(File, filename:extension(File))
    ),
-   ok = maybe_ephemeral(Opts, Name),
-   ok = maybe_permanent(Opts, Name),
-   ok = maybe_system(Opts, Name),
-   ok = maybe_remove(Opts, Name),
-   ok = maybe_patch(Opts, Name).
-   
-
-maybe_ephemeral(Opts, App) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
-   case lists:member(ephemeral, Opts) of
-      false ->
-         ok;
-      true  ->
-         io:format("==> ephemeral ~s~n", [App]),
-         drift:ephemeral(Node, App)
-   end.
-
-maybe_permanent(Opts, App) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
-   case lists:member(permanent, Opts) of
-      false ->
-         ok;
-      true  ->
-         io:format("==> permanent ~s~n", [App]),
-         drift:permanent(Node, App)
-   end.
-
-maybe_system(Opts, App) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
-   case lists:member(system, Opts) of
-      false ->
-         ok;
-      true  ->
-         io:format("==> system ~s~n", [App]),
-         drift:permanent(Node, App, [sys])
-   end.
-
-maybe_remove(Opts, App) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
-   case lists:member(remove, Opts) of
-      false ->
-         ok;
-      true  ->
-         io:format("==> remove ~s~n", [App]),
-         drift:withdraw(Node, App)
-   end.
-
-maybe_patch(Opts, Mod) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
    case lists:member(patch, Opts) of
       false ->
-         ok;
+         case lists:member(remove, Opts) of
+            false ->
+               deploy(Opts, Name);
+            true  ->
+               remove(Opts, Name)
+         end;
       true  ->
-         io:format("==> patch ~s~n", [Mod]),
-         drift:patch(Node, Mod)
+         patch(Opts, Name)
    end.
+
+%%
+%% patch single module only
+patch(Opts, Mod) ->
+   {_, Node} = lists:keyfind(join, 1, Opts),
+   io:format("==> patch ~s~n", [Mod]),
+   drift:patch(Node, Mod).
+
+%%
+%% remove application
+remove(Opts, App) ->
+   {_, Node} = lists:keyfind(join, 1, Opts),
+   io:format("==> remove ~s~n", [App]),
+   drift:withdraw(Node, App).
+
+%%
+%% deploy application
+deploy(Opts, App) ->
+   {_, Node} = lists:keyfind(join, 1, Opts),
+   List = case lists:member(deps, Opts) of
+      false ->
+         [App];
+      true  ->
+         applib:deps(App)
+   end,
+   case lists:member(system, Opts) of
+      false ->
+         case lists:member(permanent, Opts) of
+            false ->
+               io:format("==> ephemeral ~s~n", [App]),
+               drift:ephemeral(Node, List);
+            true  ->
+               io:format("==> permanent ~s~n", [App]),
+               drift:permanent(Node, List)
+         end;
+      true  ->
+         io:format("==> system ~s~n", [App]),
+         drift:permanent(Node, List, [sys])
+   end.
+   
+   
+%%
+%%
+add_code_path(Opts, File) ->
+   Path = filename:dirname(File),
+   code:add_patha(Path),
+   ?verbose("::: add path ~s~n", [Path], Opts),
+   lists:foreach(
+      fun(LibDir) ->
+         lists:foreach(
+            fun(X) ->
+               code:add_patha(X),
+               ?verbose("::: add path ~s~n", [X], Opts)
+            end,
+            filelib:wildcard(filename:join([LibDir, "*", "ebin"]))
+         )
+      end,
+      [X || {libdir, X} <- Opts]
+   ).
+
+
+
+
+
+
+
    
 
 

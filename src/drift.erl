@@ -41,36 +41,30 @@
 
 ephemeral(Node, App)
  when is_atom(App) ->
-   % try
-      ephemeral(drift_erl:new(Node, App))
-   % catch _:Reason ->
-      % Reason
-   % end;
-   ;
+   ephemeral(Node, [App], [app]);
 
-ephemeral(Node, [Tail]) ->
-   ephemeral(Node, Tail);
-ephemeral(Node, [Head | Tail]) ->
-   case drift_erl:exists(drift_erl:new(Node, Head)) of
-      %% deploy missed dependency
+ephemeral(Node, App)
+ when is_list(App) ->
+   ephemeral(Node,  App,  [app]).
+
+
+ephemeral(Node, [App], [Type]) ->
+   %% force deployment of last application
+   ephemeral(drift_erl:new(Node, Type, App));
+
+ephemeral(Node, [Head | Tail], [Type]) ->
+   %% deploy only missing application
+   App = drift_erl:new(Node, Type, Head),
+   case drift_erl:exists(App) of
       non_existing ->
-         case ephemeral(Node, Head) of
-            ok    ->
-               ephemeral(Node, Tail);
-            Error ->
-               Error
-         end;
-      %% do not deploy existed dependency   
+         ephemeral(App),
+         ephemeral(Node, Tail);
       _ ->
          ephemeral(Node, Tail)
-   end.
+   end;
 
 ephemeral(Node, App, [Type]) ->
-   try
-      ephemeral(drift_erl:new(Node, Type, App))
-   catch _:Reason ->
-      Reason
-   end.
+   ephemeral(drift_erl:new(Node, Type, App)).
 
 ephemeral(X) ->
    ?DEBUG("==> ephemeral ~s (~s)~n", [drift_erl:name(X), drift_erl:vsn(X)]),
@@ -92,34 +86,28 @@ ephemeral(X) ->
 
 permanent(Node, App)
  when is_atom(App) ->
-   try
-      permanent(drift_erl:new(Node, App))
-   catch _:Reason ->
-      Reason
-   end;
+   permanent(Node, [App], [app]);
+permanent(Node, App)
+ when is_list(App) ->
+   permanent(Node,  App,  [app]).
 
-permanent(Node, [Tail]) ->
-   permanent(Node, Tail);
-permanent(Node, [Head | Tail]) ->
-   case drift_erl:exists(drift_erl:new(Node, Head)) of
+permanent(Node, [App], [Type]) ->
+   %% force deployment of last application
+   permanent(drift_erl:new(Node, Type, App));
+
+permanent(Node, [Head | Tail], [Type]) ->
+   %% deploy only missing application
+   App = drift_erl:new(Node, Type, Head),
+   case drift_erl:exists(App) of
       non_existing ->
-         case permanent(Node, Head) of
-            ok    ->
-               permanent(Node, Tail);
-            Error ->
-               Error
-         end;
+         permanent(App),
+         permanent(Node, Tail);
       _ ->
          permanent(Node, Tail)
-   end.
+   end;
 
-permanent(Node, App, [Type])
- when is_atom(App) ->
-   try
-      permanent(drift_erl:new(Node, Type, App))
-   catch _:Reason ->
-      Reason
-   end.
+permanent(Node, App, [Type]) ->
+   permanent(drift_erl:new(Node, Type, App)).
 
 permanent(X) ->
    ?DEBUG("==> permanent ~s (~s)~n", [drift_erl:name(X), drift_erl:vsn(X)]),
@@ -142,11 +130,7 @@ permanent(X) ->
 -spec(withdraw/2 :: (node(), atom()) -> ok | {error, any()}).
 
 withdraw(Node, App) ->
-   try
-      withdraw(drift_erl:new(Node, App))
-   catch _:Reason ->
-      Reason
-   end.
+   withdraw(drift_erl:new(Node, App)).
 
 withdraw(X) ->
    ?DEBUG("==> withdraw ~s~n", [drift_erl:name(X)]),
