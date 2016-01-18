@@ -22,7 +22,7 @@
 
 %%
 %%
--define(verbose(Msg, Args, Opts),  lists:member(verbose, Opts) =/= undefined andalso io:format(Msg, Args)).
+-define(verbose(Msg, Args, Opts),  lists:member(verbose, Opts) =/= false andalso io:format(Msg, Args)).
 
 %%
 %% command-line entry
@@ -52,35 +52,54 @@ opts() ->
       {help,      $h, "help",    undefined,        "Print usage"}
      ,{join,      $J, "join",    atom,             "Erlang long node name of remote node"}
      ,{cookie,    $C, "cookie",  {atom, nocookie}, "Erlang network distribution magic cookie"}
-     ,{libdir,    $L, "libdir",  string,           "Root path to lookup libraries (expanded to path/*/ebin)"}
-     ,{prefix,    $P, "prefix",  string,           "Prefix to install libraries"}
-     ,{deps,      $d, undefined, undefined,        "Install all application dependencies"}
-     ,{system,    $s, undefined, undefined,        "System flag, installs library to code:lib_dir()"}
-     ,{permanent, $p, undefined, undefined,        "Permanent flag, application code is written to disk"}
-     ,{remove,    $r, undefined, undefined,        "Remove flag, application code is withdrawn from node"}
-     ,{patch,     $m, undefined, undefined,        "Patch module (ephemeral module deployment)"}
+
+     ,{libdir,    $L, "libdir",  string,           "Root path to install libraries on remote node"}
+     ,{vardir,    $V, "vardir",  string,           "Root path to install data on remote node"}
+     ,{path,      $P, "path",    string,           "Root path to lookup libraries (expanded to path/*/ebin)"}
+
+     ,{app,       $a, undefined, undefined,        "Application deployment flag"}
+     ,{file,      $f, undefined, undefined,        "Files deployment flag"}
+
+     ,{permanent, $p, undefined, undefined,        "Permanently deployment flag"}
+     ,{delete,    $d, undefined, undefined,        "Remove files flag"}
+
+     ,{system,    $s, undefined, undefined,        "System code deployment flag using code:lib_dir()"}
+     ,{recursive, $r, undefined, undefined,        "Recursive deployment (application deps)"}
      ,{verbose,   $v, undefined, undefined,        "Verbose output"}
    ].
 
 %%
 %% 
 init(Opts, Files) ->
-   ok = init_prefix(Opts),
+   ok = init_env(Opts),
    ok = init_net(Opts),
    ok = join_net(Opts),
-   ok = lists:foreach(
-      fun(File) -> exec(Opts, File) end,
-      Files
-   ).
+   ok = lists:foreach(fun(File) -> exec(Opts, File) end, Files).
 
-init_prefix(Opts) ->
-   case lists:keyfind(prefix, 1, Opts) of
+%%
+%%
+init_env(Opts) ->
+   init_env_libdir(Opts),
+   init_env_vardir(Opts).
+
+init_env_libdir(Opts) ->
+   case lists:keyfind(libdir, 1, Opts) of
       false ->
          ok;
       {_, LibDir} ->
          application:set_env(drift, libdir, LibDir)
    end.
 
+init_env_vardir(Opts) ->
+   case lists:keyfind(vardir, 1, Opts) of
+      false ->
+         ok;
+      {_, LibDir} ->
+         application:set_env(drift, vardir, LibDir)
+   end.
+
+%%
+%%
 init_net(Opts) ->
    Node = erlang:list_to_atom(filename:basename(escript:script_name()) ++ "@127.0.0.1"),
    {_, Cookie} = lists:keyfind(cookie, 1, Opts),
@@ -93,63 +112,111 @@ join_net(Opts) ->
    pong = net_adm:ping(Node),
    io:format("==> join ~s~n", [Node]).
 
+%%
+%%
 exec(Opts, File) ->
+   {_, Node} = lists:keyfind(join, 1, Opts),
    add_code_path(Opts, File),
-   Name = erlang:list_to_atom(
-      filename:basename(File, filename:extension(File))
-   ),
-   case lists:member(patch, Opts) of
+   case lists:member(permanent, Opts) of
       false ->
-         case lists:member(remove, Opts) of
+         case lists:member(delete, Opts) of
             false ->
-               deploy(Opts, Name);
+               exec(ephemeral, type(Opts), Node, Opts, File);
             true  ->
-               remove(Opts, Name)
-         end;
+               exec(delete, type(Opts), Node, Opts, File)
+         end;      
       true  ->
-         patch(Opts, Name)
+         exec(permanent, type(Opts), Node, Opts, File)
+   end.
+
+exec(permanent, app,  Node, Opts, File) ->
+   io:format("==> permanent ~s~n", [File]),
+   drift:permanent(Node, apps(Opts, File), flags(Opts));
+
+exec(permanent, file, Node, _Opts, File) ->
+   io:format("==> patch ~s~n", [File]),
+   case filename:extension(File) of
+      ".beam" ->
+         drift:patch(Node, mod(File));
+      []      ->
+         drift:patch(Node, mod(File));
+      _       ->
+         drift:patch(Node, filename:basename(File))
+   end;
+
+exec(ephemeral, app,  Node, Opts, File) ->
+   io:format("==> ephemeral ~s~n", [File]),
+   drift:ephemeral(Node, apps(Opts, File));
+
+exec(ephemeral, file, Node, _Opts, File) ->
+   io:format("==> patch ~s~n", [File]),
+   case filename:extension(File) of
+      ".beam" ->
+         drift:patch(Node, mod(File));
+      []      ->
+         drift:patch(Node, mod(File));
+      _       ->
+         drift:patch(Node, filename:basename(File))
+   end;
+
+exec(delete, app,  Node, Opts, File) ->
+   io:format("==> remove ~s~n", [File]),
+   drift:withdraw(Node, apps(Opts, File));
+
+exec(delete, file, Node, _Opts, File) ->
+   io:format("==> remove ~s~n", [File]),
+   case filename:extension(File) of
+      ".beam" ->
+         drift:revert(Node, mod(File));
+      []      ->
+         drift:revert(Node, mod(File));
+      _       ->
+         drift:revert(Node, filename:basename(File))
    end.
 
 %%
-%% patch single module only
-patch(Opts, Mod) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
-   io:format("==> patch ~s~n", [Mod]),
-   drift:patch(Node, Mod).
+%%
+type(Opts) ->
+   case lists:member(app, Opts) of
+      true  ->
+         app;
+      false ->
+         case lists:member(file, Opts) of
+            true  ->
+               file;
+            false ->
+               undefined
+         end
+   end.
 
 %%
-%% remove application
-remove(Opts, App) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
-   io:format("==> remove ~s~n", [App]),
-   drift:withdraw(Node, App).
-
-%%
-%% deploy application
-deploy(Opts, App) ->
-   {_, Node} = lists:keyfind(join, 1, Opts),
-   List = case lists:member(deps, Opts) of
+%% list of apps to install
+apps(Opts, File) ->
+   App = erlang:list_to_atom(
+      filename:basename(File, filename:extension(File))
+   ),
+   case lists:member(recursive, Opts) of
       false ->
          [App];
       true  ->
          applib:deps(App)
-   end,
+   end.
+
+mod(File) ->
+   erlang:list_to_atom(
+      filename:basename(File, filename:extension(File))
+   ).
+
+%%
+%%
+flags(Opts) ->
    case lists:member(system, Opts) of
       false ->
-         case lists:member(permanent, Opts) of
-            false ->
-               io:format("==> ephemeral ~s~n", [App]),
-               drift:ephemeral(Node, List);
-            true  ->
-               io:format("==> permanent ~s~n", [App]),
-               drift:permanent(Node, List)
-         end;
+         [app];
       true  ->
-         io:format("==> system ~s~n", [App]),
-         drift:permanent(Node, List, [sys])
+         [sys]
    end.
-   
-   
+
 %%
 %%
 add_code_path(Opts, File) ->
@@ -166,7 +233,7 @@ add_code_path(Opts, File) ->
             filelib:wildcard(filename:join([LibDir, "*", "ebin"]))
          )
       end,
-      [X || {libdir, X} <- Opts]
+      [X || {path, X} <- Opts]
    ).
 
 

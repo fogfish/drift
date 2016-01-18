@@ -21,6 +21,7 @@
 %%
 %% default libdir
 -define(CONFIG_LIBDIR, "/tmp/drift/lib").
+-define(CONFIG_VARDIR, "/tmp/drift/var").
 
 %%
 %% logger macro

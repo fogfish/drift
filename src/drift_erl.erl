@@ -29,12 +29,8 @@
   ,binary/1
   ,module/1
   ,private/1
-  % 
   ,exists/1
   ,path/1
-  % ,node/1
-  % ,appfile/1
-  % ,version/1
 ]).
 
 %% internal state
@@ -138,24 +134,13 @@ config(Key, Default) ->
 %% lookup application
 lookup(Name) ->
    File = scalar:c(Name) ++ ".app",
-   case code:lib_dir(Name) of
-      {error, bad_name} ->
-         code:where_is_file(File);
-      Path ->
-         filename:join([Path, ebin, File])
-   end.
+   code:where_is_file(File).
 
 lookup(Node, Name) ->
    File = scalar:c(Name) ++ ".app",
-   case rpc:call(Node, code, lib_dir, [Name]) of
-      {error, bad_name} ->
-         rpc:call(Node, code, where_is_file, [File]);
-      Path ->
-         filename:join([Path, ebin, File])
-   end.
+   rpc:call(Node, code, where_is_file, [File]).
 
-
-
+%%
 %% read version
 version(non_existing) ->
    undefined;

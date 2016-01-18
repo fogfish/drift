@@ -25,8 +25,10 @@
   ,permanent/2
   ,permanent/3
   ,withdraw/2
+  ,withdraw/3
   ,deploy/2
   ,patch/2
+  ,revert/2
   ,main/1
 ]).
 
@@ -128,9 +130,32 @@ permanent(X) ->
 %%
 %% withdraw deployed application.
 -spec(withdraw/2 :: (node(), atom()) -> ok | {error, any()}).
+-spec(withdraw/3 :: (node(), atom(), list()) -> ok | {error, any()}).
 
-withdraw(Node, App) ->
-   withdraw(drift_erl:new(Node, App)).
+withdraw(Node, App)
+ when is_atom(App) ->
+   withdraw(Node, [App], [app]);
+withdraw(Node, App)
+ when is_list(App) ->
+   withdraw(Node,  App,  [app]).
+
+withdraw(Node, [App], [Type]) ->
+   withdraw(drift_erl:new(Node, Type, App));
+
+withdraw(Node, [Head | Tail], [Type]) ->
+   %% deploy only missing application
+   App = drift_erl:new(Node, Type, Head),
+   case drift_erl:exists(App) of
+      non_existing ->
+         withdraw(App),
+         withdraw(Node, Tail);
+      _ ->
+         withdraw(Node, Tail)
+   end;
+
+withdraw(Node, App, [Type]) ->
+   withdraw(drift_erl:new(Node, Type, App)).
+
 
 withdraw(X) ->
    ?DEBUG("==> withdraw ~s~n", [drift_erl:name(X)]),
@@ -160,12 +185,60 @@ deploy(Node, App) ->
 %% patch single module
 -spec(patch/2 :: (node(), atom()) -> ok | {error, any()}).
 
-patch(Node, Mod) ->
+patch(Node, Mod)
+ when is_atom(Mod) ->
    ?DEBUG("==> patch ~s~n", [Mod]),
    {Mod, Binary, _} = code:get_object_code(Mod),
    _    = rpc:call(Node, code, purge, [Mod]),
    {module, Mod} = rpc:call(Node, code, load_binary, [Mod, undefined, Binary]),
-   ok.
+   ok;
+
+patch(Node, File)
+ when is_list(File) ->
+   ?DEBUG("==> patch ~s~n", [File]),
+   case code:where_is_file(File) of
+      non_existing ->
+         {error, not_found};
+
+      "/" ++ Suffix = Lpath ->
+         {ok, Data} = file:read_file(Lpath),
+         Path = filename:join([config(vardir, ?CONFIG_VARDIR), Suffix]),
+         ok   = rpc:call(Node, filelib, ensure_dir, [Path]),
+         rpc:call(Node, file, write_file, [Path, Data]);
+
+      Lpath        ->
+         {ok, Data} = file:read_file(Lpath),
+         Path = filename:join([config(vardir, ?CONFIG_VARDIR), Lpath]),
+         ok   = rpc:call(Node, filelib, ensure_dir, [Path]),
+         rpc:call(Node, file, write_file, [Path, Data])
+   end.
+
+%%
+%% revert module
+-spec(revert/2 :: (node(), atom()) -> ok | {error, any()}).
+
+revert(Node, Mod)
+ when is_atom(Mod) ->
+   ?DEBUG("==> revert ~s~n", [Mod]),
+   rpc:call(Node, code, purge, [Mod]),
+   rpc:call(Node, code, delete, [Mod]);
+
+revert(Node, File)
+ when is_list(File) ->
+   ?DEBUG("==> revert ~s~n", [File]),
+   case code:where_is_file(File) of
+      non_existing ->
+         {error, not_found};
+
+      "/" ++ Suffix = Lpath ->
+         Path = filename:join([config(vardir, ?CONFIG_VARDIR), Suffix]),
+         rpc:call(Node, file, delete, [Path]);
+
+      Lpath        ->
+         Path = filename:join([config(vardir, ?CONFIG_VARDIR), Lpath]),
+         rpc:call(Node, file, delete, [Path])
+   end.
+
 
 %%
 %% command-line utility
@@ -181,6 +254,16 @@ main(Args) ->
 %%-----------------------------------------------------------------------------
 
 %%
+%% application config
+config(Key, Default) ->
+   case application:get_env(drift, Key) of
+      undefined -> 
+         Default;
+      {ok, Val} ->
+         Val
+   end.
+
+%%
 %% ephemeral appfile deployment
 ephemeral_deploy_appfile(X) ->
    AppFile = filename:basename(drift_erl:appfile(X)),
@@ -193,7 +276,8 @@ ephemeral_deploy_appfile(X) ->
          ok   = rpc:call(Node, filelib, ensure_dir, [File]),
          true = rpc:call(Node, code, add_patha, [filename:dirname(File)]),
          ok   = rpc:call(Node, file, write_file, [File, Bin]);
-      _ ->
+      L ->
+         io:format("==> ~p~n", [L]),
          ok
    end.
 
